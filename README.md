@@ -168,9 +168,9 @@ interpreting results:
 ## Attribution and license
 
 This extension builds directly on the `isochrones` package by Tim Morton and on
-the MIST stellar models (Choi et al. 2016; Dotter 2016). If you use it, please
-cite `isochrones`, MIST, and MultiNest as appropriate, in addition to this
-repository.
+the MIST stellar models (Choi et al. 2016; Dotter 2016, Dotter et al. 2026). 
+If you use it, please cite `isochrones`, MIST, and MultiNest as appropriate, 
+in addition to this repository.
 
 Distributed under the same MIT license as `isochrones` (see `LICENSE`). The
 original `isochrones` source is unmodified; this repository adds sibling modules
