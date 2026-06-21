@@ -14,11 +14,23 @@ Throughout, the one capability v2.5 adds over stock `isochrones` is that
 and Aᵥ.
 
 > **Conventions used everywhere below**
-> - **Age** is `log10(age / yr)`. So `9.7` means ~5 Gyr, `10.1` means ~12.6 Gyr.
+> - **Age** is `log10(age / yr)`. So `9.6` means ~4 Gyr, `10.1` means ~12.6 Gyr.
 > - **Distance** is in parsecs; **Aᵥ** is V-band extinction in magnitudes.
-> - **NIRCam** bands are bare (`F090W`, `F162M`, …); **HST** bands must be
->   system-qualified (`ACS_WFC_F475W`, `WFC3_UVIS_F390W`). Bare `F475W`/`F390W`
->   are ambiguous and will not resolve.
+> - **Gaia** and **2MASS** bands use their standard short names (`G`, `BP`, `RP`;
+>   `J`, `H`, `Ks`); **NIRCam** bands are bare (`F090W`, `F162M`, …); **HST** bands
+>   must be system-qualified (`ACS_WFC_F475W`, `WFC3_UVIS_F606W`). Bare HST names
+>   like `F606W` are ambiguous (both ACS and WFC3 have them) and will not resolve.
+
+> **The running example.** Every code block below fits the same star: a **G-type
+> dwarf about 6 kpc away**, with a **Gaia parallax good to 10%** and apparent
+> magnitudes in **Gaia G**, **HST/WFC3 F606W and F814W**, and **2MASS J, H, Ks**.
+> Its true line-of-sight extinction is **Aᵥ = 2.5**, but we will fit Aᵥ under a
+> **flat prior from 0 to 6 mag** and let the data recover it. The illustrative
+> magnitudes are:
+>
+> | G | F606W | F814W | J | H | Ks | parallax |
+> | --- | --- | --- | --- | --- | --- | --- |
+> | 20.63 | 20.84 | 19.49 | 18.28 | 17.67 | 17.46 | 0.167 ± 0.017 mas |
 
 ---
 
@@ -82,10 +94,12 @@ v1.2 fit):
 from isochrones.mist.isochrone_v2p5 import get_ichrone_v2p5_iso
 from isochrones import SingleStarModel
 
-ic = get_ichrone_v2p5_iso(bands=["F090W", "F162M", "F200W"], afe=0.4)
+ic = get_ichrone_v2p5_iso(bands=["G", "J", "H", "Ks"], afe=0.0)
 model = SingleStarModel(ic,
-                        F090W=(21.03, 0.02), F162M=(19.20, 0.02),
-                        F200W=(18.98, 0.02), parallax=(0.5, 0.1))   # parallax in mas
+                        G=(20.63, 0.02), J=(18.28, 0.02),
+                        H=(17.67, 0.02), Ks=(17.46, 0.02),
+                        parallax=(0.167, 0.017))     # parallax in mas (~6 kpc, 10%)
+model.set_bounds(AV=(0, 6))                          # flat extinction prior, 0-6 mag
 model.fit()
 print(model.derived_samples[["mass", "Teff", "logg"]].median())
 ```
@@ -114,12 +128,12 @@ from isochrones.mist.isochrone_v2p5 import (
     get_ichrone_v2p5_alpha,   # alpha as a free axis
 )
 
-# fixed alpha = +0.4, three NIRCam bands
-ic_fixed = get_ichrone_v2p5_iso(bands=["F090W", "F162M", "F200W"], afe=0.4)
+# fixed solar alpha, the Gaia + 2MASS subset
+ic_fixed = get_ichrone_v2p5_iso(bands=["G", "J", "H", "Ks"], afe=0.0)
 
-# alpha-interpolating grid spanning a JWST + HST band set
+# alpha-interpolating grid spanning the full Gaia + HST + 2MASS band set
 ic_alpha = get_ichrone_v2p5_alpha(
-    bands=["ACS_WFC_F475W", "F090W", "F162M", "F200W", "F300M", "F356W", "F460M"]
+    bands=["G", "WFC3_UVIS_F606W", "WFC3_UVIS_F814W", "J", "H", "Ks"]
 )
 ```
 
@@ -137,11 +151,11 @@ physical columns you ask for. For a **fixed-α** interpolator the point is
 `[eep, age, feh]`:
 
 ```python
-# EEP 350 (lower RGB), log-age 9.7 (~5 Gyr), [Fe/H] = -0.5
+# EEP 330 (a main-sequence G dwarf), log-age 9.6 (~4 Gyr), [Fe/H] = 0.0
 mass, radius, Teff, logg, logL = ic_fixed.interp_value(
-    [350, 9.7, -0.5], ["mass", "radius", "Teff", "logg", "logL"]
+    [330, 9.6, 0.0], ["mass", "radius", "Teff", "logg", "logL"]
 )
-print(mass, Teff, logg)
+print(mass, Teff, logg)   # ~1 Msun, ~5800 K, ~4.4
 ```
 
 Any column the grid stores can be requested (`mass`, `radius`, `Teff`, `logg`,
@@ -151,8 +165,8 @@ extra α slot, `[eep, age, feh, afe]`.
 A note on EEP (Equivalent Evolutionary Phase): it is a monotonic stage index that
 replaces "mass" as the primary track coordinate so that the same EEP means the
 same evolutionary stage across different masses and metallicities. Rough
-landmarks: ZAMS ≈ 202, main-sequence turnoff ≈ 454, RGB tip ≈ 605, with the v2.5
-grid extending to 1721.
+landmarks: ZAMS ≈ 202, mid main sequence ≈ 330 (our G dwarf), main-sequence
+turnoff ≈ 454, RGB tip ≈ 605, with the v2.5 grid extending to 1721.
 
 ---
 
@@ -166,11 +180,11 @@ observed properties for a star of known physical parameters.
 For a **fixed-α** interpolator the vector is `[eep, age, feh, distance, AV]`:
 
 ```python
-# a star at 10 kpc with AV = 0.3
+# our G dwarf: 6 kpc, AV = 2.5
 Teff, logg, feh, mags = ic_fixed.interp_mag(
-    [350, 9.7, -0.5, 10_000.0, 0.3], ["F090W", "F162M", "F200W"]
+    [330, 9.6, 0.0, 6000.0, 2.5], ["G", "J", "H", "Ks"]
 )
-print(dict(zip(["F090W", "F162M", "F200W"], mags)))
+print(dict(zip(["G", "J", "H", "Ks"], mags)))
 ```
 
 For the **α-interpolating** grid, insert α right after `[Fe/H]`, giving
@@ -178,14 +192,16 @@ For the **α-interpolating** grid, insert α right after `[Fe/H]`, giving
 
 ```python
 Teff, logg, feh, mags = ic_alpha.interp_mag(
-    [350, 9.7, -0.5, 0.4, 10_000.0, 0.3],
-    ["ACS_WFC_F475W", "F090W", "F300M"]
+    [330, 9.6, 0.0, 0.0, 6000.0, 2.5],
+    ["G", "WFC3_UVIS_F606W", "J"]
 )
 ```
 
-Sweeping one axis while holding the others fixed is the easy way to see, e.g., how
-a water-sensitive band like `F300M` responds to α at fixed Teff — the leverage
-the variable-α fit relies on.
+Sweeping one axis while holding the others fixed is the easy way to build
+intuition — e.g. how the optical–NIR colors redden as you push Aᵥ from 0 to 6, or
+how weakly the broadband magnitudes respond to α (broadband optical/NIR carries
+little α leverage, which is exactly why α is hard to pin from a star like this one;
+see the caveats in §9).
 
 ---
 
@@ -199,7 +215,7 @@ wire it in — but you can instantiate one to inspect or extend the band set:
 
 ```python
 from isochrones.mist.bc_v2p5 import MISTBolometricCorrectionGridV2p5
-bc = MISTBolometricCorrectionGridV2p5(["F090W", "ACS_WFC_F475W"])
+bc = MISTBolometricCorrectionGridV2p5(["G", "WFC3_UVIS_F606W", "J"])
 ```
 
 The v2.5 BC tables are indexed by `(log10 Teff, logg, [Fe/H], [α/Fe], Aᵥ, Rv)`.
@@ -228,56 +244,61 @@ off fixing it.
 
 ### 7b. Define the model
 
-Observations are passed as `band=(value, uncertainty)`. Distance information can
-come from a `parallax=(mas, err)` observation or from a distance prior (next
-step).
+Observations are passed as `band=(value, uncertainty)`, plus a
+`parallax=(mas, err)` term for the distance. (Alternatively, distance can come
+from a prior — see the next step.)
 
 ```python
 from isochrones.mist.isochrone_v2p5 import get_ichrone_v2p5_alpha
 from isochrones.mist.starmodel_v2p5 import StarModelV2p5
 
-bands = ["ACS_WFC_F475W", "F090W", "F162M", "F200W", "F300M", "F356W", "F460M"]
+bands = ["G", "WFC3_UVIS_F606W", "WFC3_UVIS_F814W", "J", "H", "Ks"]
 ic = get_ichrone_v2p5_alpha(bands=bands)
 
-obs = {  # one star's apparent magnitudes
-    "ACS_WFC_F475W": 23.81, "F090W": 21.40, "F162M": 19.95, "F200W": 19.61,
-    "F300M": 19.83, "F356W": 19.55, "F460M": 19.40,
+obs = {  # the G dwarf's apparent magnitudes
+    "G": 20.63, "WFC3_UVIS_F606W": 20.84, "WFC3_UVIS_F814W": 19.49,
+    "J": 18.28, "H": 17.67, "Ks": 17.46,
 }
-model = StarModelV2p5(ic, **{b: (m, 0.02) for b, m in obs.items()})
+model = StarModelV2p5(ic,
+                      parallax=(0.167, 0.017),                    # ~6 kpc, 10%
+                      **{b: (m, 0.02) for b, m in obs.items()})
 ```
+
+(With no α-sensitive band in this set, α here is essentially prior-dominated; the
+fit is shown to exercise the variable-α machinery, but for a star like this you
+would normally use the fixed-α path from §2 instead.)
 
 ### 7c. Bounds and priors
 
-`set_bounds` clips the prior support of any parameter to a range — useful for
-pinning distance to a known value (a star in M31, say) or for restricting age to
-old populations. Pinning a parameter to a near-zero-width window effectively fixes
-it:
+`set_bounds` clips the prior support of any parameter to a range. For our star the
+key one is extinction: we want a **flat prior on Aᵥ from 0 to 6 mag**. Aᵥ's
+default prior is already uniform, so bounding it to `(0, 6)` realizes exactly that
+flat prior — the fit then has to pull the true value (2.5) out of the photometry on
+its own:
 
 ```python
-mu = 24.38                       # M31 distance modulus
-dist_pc = 10 ** (mu / 5 + 1)     # -> ~7.5e5 pc
 model.set_bounds(
-    distance=(dist_pc * 0.99, dist_pc * 1.01),   # narrow box around the known distance
-    age=(8.0, 10.13),                            # log-age: 0.1-13.5 Gyr
-    AV=(0.0, 1.5),                               # extinction ceiling
-    # afe=(...) omitted -> alpha free over the grid's full alpha range
+    AV=(0.0, 6.0),       # flat extinction prior, 0-6 mag
+    age=(8.0, 10.13),    # optional: restrict log-age to 0.1-13.5 Gyr
+    # afe omitted -> alpha free over the grid's full range
 )
 ```
 
-Priors live in `model._priors`, keyed by parameter name; assign a prior object to
-replace the default. To impose a Gaussian distance prior on top of the box above:
+Here distance is constrained by the `parallax` observation we passed in §7b, so
+there is nothing to pin. If instead you had an independently known distance (a
+star in a cluster, say) and no parallax, you could fix it with a narrow box plus a
+Gaussian prior, keyed by name in `model._priors`:
 
 ```python
 from isochrones.priors import GaussianPrior
-model._priors["distance"] = GaussianPrior(
-    dist_pc, dist_pc * 0.003, bounds=(dist_pc * 0.99, dist_pc * 1.01)
-)
+d = 6000.0                                   # known distance in pc
+model.set_bounds(distance=(d * 0.97, d * 1.03))
+model._priors["distance"] = GaussianPrior(d, 0.1 * d, bounds=(d * 0.97, d * 1.03))
 ```
 
-Other prior classes from `isochrones.priors` include `FlatPrior`,
-`FlatLogPrior`, and `PowerLawPrior` (the default IMF-like mass/EEP prior). To
-**fix α** instead of fitting it, pin it the same way bounds pin distance:
-`model.set_bounds(afe=(-0.01, 0.01))`.
+Other prior classes from `isochrones.priors` include `FlatPrior`, `FlatLogPrior`,
+and `PowerLawPrior` (the default IMF-like mass/EEP prior). To **fix α** instead of
+fitting it, pin it the same way: `model.set_bounds(afe=(-0.01, 0.01))`.
 
 ### 7d. The `model.fit(...)` call — every argument
 
@@ -336,9 +357,10 @@ s  = model.samples            # raw fit parameters, incl. 'afe' for StarModelV2p
 ds = model.derived_samples    # physical/photometric quantities, incl. predicted *_mag
 
 print(s["afe"].median())                                  # inferred [alpha/Fe]
+print(s["AV"].median())                                   # recovered extinction (truth: 2.5)
 print(ds[["mass", "Teff", "logg"]].median())              # physical params
 # predicted-minus-observed residual in a band:
-print(obs["F300M"] - ds["F300M_mag"].median())
+print(obs["G"] - ds["G_mag"].median())
 ```
 
 The Bayesian log-evidence (`lnZ`), handy for model comparison or for flagging
@@ -358,79 +380,60 @@ lnZ = stats["global evidence"]
 
 ## 8. Using multiple CPUs
 
-There are two distinct ways to spread work across cores. Pick based on whether you
-have **one expensive fit** or **many independent fits**.
-
-### 8a. One fit, many cores — MultiNest via MPI
-
-MultiNest is natively MPI-parallel: it distributes the live-point likelihood
-evaluations across ranks. If `pymultinest`/MultiNest were built with MPI support
-and `mpi4py` is installed, you simply launch your *unmodified* fitting script
-under `mpiexec`:
-
-```bash
-mpiexec -n 4 python my_single_fit.py     # one fit, 4 cores
-```
-
-No code change is required — `pymultinest` detects the MPI communicator. This is
-the right tool for a single high-`n_live_points` fit. It does **not** help much
-for many small fits, where the per-fit fixed overhead dominates.
-
-### 8b. Many fits, many cores — one process per star
-
-For a catalog of stars, the fits are independent, so the efficient pattern is
-"embarrassingly parallel": a `multiprocessing` pool with **one star per worker**.
-Two rules keep it fast and correct: build the (expensive) interpolator **once per
-worker** in an initializer, and pin the math libraries to a single thread each so
-N workers don't oversubscribe the CPU.
+When you have many stars to fit, the fits are independent, so the natural way to
+use more cores is to run **one star per worker** with a `multiprocessing` pool.
+Two things keep it fast and correct: each worker builds the (expensive)
+interpolator **once** in an initializer and reuses it, and each fit gets its own
+`basename` so the workers never clash over output files.
 
 ```python
 import os
-os.environ["OMP_NUM_THREADS"] = "1"          # set BEFORE importing numpy
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
+# Limit each worker to one math-library thread (set before importing numpy),
+# so the workers don't oversubscribe the cores.
+for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ[var] = "1"
 
 import tempfile
 import multiprocessing as mp
 
-BANDS = ["ACS_WFC_F475W", "F090W", "F162M", "F200W", "F300M", "F356W", "F460M"]
-_IC = None                                    # per-worker grid, filled by the initializer
+BANDS = ["G", "WFC3_UVIS_F606W", "WFC3_UVIS_F814W", "J", "H", "Ks"]
 
-def _init():
-    global _IC
+interpolator = None   # each worker fills this once, in init_worker()
+
+def init_worker():
+    global interpolator
     from isochrones.mist.isochrone_v2p5 import get_ichrone_v2p5_alpha
-    _IC = get_ichrone_v2p5_alpha(bands=BANDS)   # built once, reused for every star this worker handles
+    interpolator = get_ichrone_v2p5_alpha(bands=BANDS)
 
-def _fit_one(star):                           # star: {band: (mag, err), ...}
+def fit_one_star(obs):                    # obs = {band: (mag, err), ...}
     from isochrones.mist.starmodel_v2p5 import StarModelV2p5
-    base = os.path.join(tempfile.mkdtemp(), "c-")   # unique basename per fit -> no file races
-    m = StarModelV2p5(_IC, **star)
-    m.fit(n_live_points=500, basename=base, verbose=False, overwrite=True)
-    return float(m.samples["afe"].median())
+    basename = os.path.join(tempfile.mkdtemp(), "fit-")   # unique per star
+    model = StarModelV2p5(interpolator, **obs)
+    model.fit(n_live_points=500, basename=basename, verbose=False, overwrite=True)
+    return float(model.samples["afe"].median())
 
 if __name__ == "__main__":
-    stars = [...]                             # list of per-star obs dicts
-    ctx = mp.get_context("spawn")             # 'spawn' is the safe context with MultiNest
-    with ctx.Pool(6, initializer=_init) as pool:     # up to 6 cores
-        afe_values = list(pool.imap_unordered(_fit_one, stars, chunksize=1))
+    stars = [...]                         # a list of per-star observation dicts
+    pool = mp.get_context("spawn").Pool(6, initializer=init_worker)   # 6 cores
+    afe_values = pool.map(fit_one_star, stars)
+    pool.close()
 ```
 
-This scales nearly linearly with core count until you saturate memory or I/O.
-Two combinable knobs trade throughput against per-star quality: the pool size (how
-many stars run at once) and `n_live_points` (how hard each fit works).
-
-> Do **not** combine 8a and 8b — running an MPI build under a `multiprocessing`
-> pool will oversubscribe and can deadlock. Use the pool with a non-MPI build, or
-> use `mpiexec` on a single fit, not both.
+Throughput scales nearly linearly with the number of workers. The two knobs to
+balance are the pool size (how many stars run at once) and `n_live_points` (how
+hard each individual fit works).
 
 ---
 
 ## 9. Band naming and scientific caveats
 
-**Band naming.** NIRCam filters are bare (`F090W`, `F162M`, `F300M`, …) and resolve
-to JWST automatically. HST filters must be system-qualified — `ACS_WFC_F475W`,
-`WFC3_UVIS_F390W` — because bare `F475W`/`F390W` exist in more than one HST system
-and are ambiguous.
+**Band naming.** Gaia and 2MASS filters use their standard short names (`G`, `BP`,
+`RP`; `J`, `H`, `Ks`). NIRCam filters are bare (`F090W`, `F162M`, …) and resolve to
+JWST automatically. HST filters must be system-qualified — `ACS_WFC_F475W`,
+`WFC3_UVIS_F606W` — because bare names like `F606W` exist in more than one HST
+system and are ambiguous. Whichever system you use, its bolometric-correction
+tables must be present in your downloaded BC set; if a name doesn't resolve, check
+the column names your v2.5 BC grid actually exposes for that system.
 
 **Caveats worth reading before trusting a number** (expanded in the repository
 README):
@@ -438,11 +441,16 @@ README):
 - **α is only as good as its photometric leverage.** Broadband `[α/Fe]` is
   indirect; the absolute scale has a systematic floor from model BCs and
   zero-points, and α is partly degenerate with `[Fe/H]` along the total-metallicity
-  ridge. Relative, star-to-star α is more robust than the absolute value.
+  ridge. With only broadband optical/NIR (as in this tutorial's example), α has
+  little leverage and is best fixed; it becomes informative when an α-sensitive
+  band (e.g. a water- or CN-sensitive filter) is included. Relative, star-to-star α
+  is more robust than the absolute value.
 - **Avoid the TP-AGB for abundance work.** Above the RGB tip (EEP ≳ 605), dredge-up
   changes surface C/O, so molecular-band α proxies no longer track natal `[α/Fe]`.
   Restrict abundance interpretation to the RGB.
-- **Ages of giants are prior-dominated** without a main-sequence turnoff.
+- **Ages of unevolved or evolved stars can be prior-dominated.** A clear
+  main-sequence turnoff carries most of the age information; far from it (lower main
+  sequence or giant branch) the age posterior leans on the prior.
 - **The extinction law matters.** The fixed-α collapse freezes `Rv = 3.1`; a wrong
   reddening curve produces wavelength-monotonic residuals the fit will absorb into
   Aᵥ.
