@@ -1,5 +1,31 @@
 """MIST v2.5 (alpha-enhanced) evolution-track grid -- Option A.
 
+===========================================================================
+CACHE INVALIDATION -- READ THIS BEFORE EDITING compute_additional_columns
+===========================================================================
+The values produced by compute_additional_columns (feh, mh_surf, age, etc.)
+are baked into THREE separate on-disk caches. Editing this method has NO
+EFFECT until ALL of them are deleted, because each is loaded in preference to
+recomputing:
+
+  1. the grid dataframe HDF
+       ~/.isochrones/mist/mist_v2.5_vvcrit0.4_full_isos_afe{m2,p0,p2,p4,p6}.h5
+  2. the DFInterpolator array NPZ  (THIS is the one that reaches the BC lookup;
+       grid.py builds DFInterpolator(self.df, filename=<npz>) and interp.py
+       loads the npz array in preference to self.df if it exists)
+       ~/.isochrones/mist/full_grid_v2.5_vvcrit0.4_full_isos_afe{m2,p0,p2,p4,p6}.npz
+  3. the dm_deep derivative HDF
+       ~/.isochrones/mist/dm_deep_v2.5_vvcrit0.4_full_isos_afe{m2,p0,p2,p4,p6}.h5
+
+  (Track-grid users additionally have tracks/full_grid_v2.5_vvcrit0.4.npz,
+   tracks/array_grid_v2.5_vvcrit0.4.npz, tracks/dt_deep_v2.5_vvcrit0.4.h5.)
+
+Symptom of a stale npz: model_grid.df['feh'] looks correct but
+interp.grid[...,'feh'] (what the jitted BC lookup actually reads) still shows
+old values. Delete all three cache types, then rebuild single-threaded once
+(load each alpha sub-grid) BEFORE launching any concurrent fits.
+===========================================================================
+
 Purely additive: subclasses ``MISTEvolutionTrackGrid`` and changes only what
 MIST v2.5 requires. The original ``mist/models.py`` is left untouched, and
 nothing here runs unless ``MISTEvolutionTrackGridV2p5`` is constructed.
@@ -92,8 +118,21 @@ class MISTEvolutionTrackGridV2p5(MISTEvolutionTrackGrid):
         df = StellarModelGrid.compute_additional_columns(self, df)
         zcol = "log_surf_cell_z" if "log_surf_cell_z" in df.columns else "log_surf_z"
         with np.errstate(divide="ignore", invalid="ignore"):
-            df["feh"] = df[zcol] - np.log10(df["surface_h1"]) - np.log10(SOLAR_ZX_V25)
+            # See MISTIsochroneGridV2p5.compute_additional_columns for the full
+            # rationale: log(Z/X)-log(Z/X)_sun is surface TOTAL metallicity [M/H],
+            # not [Fe/H]; on alpha-enhanced grids it overshoots [Fe/H] (~+0.29 dex at
+            # [a/Fe]=+0.4) and drives the BC query past the +0.50 [Fe/H] edge -> NaN.
+            # Keep it under its correct name for future use.
+            df["mh_surf"] = df[zcol] - np.log10(df["surface_h1"]) - np.log10(SOLAR_ZX_V25)
             df["age"] = np.log10(df["star_age"])
+
+        # Option (a): BC lookup uses INITIAL [Fe/H] (the nominal grid value carried on
+        # the 'feh' index level, set per-file from the filename), not surface [M/H].
+        # NOTE: no diffusion / surface-evolution correction is applied when calling the
+        # bolometric corrections (deferred; surface value kept as 'mh_surf' above).
+        if isinstance(df.index, pd.MultiIndex) and "feh" in (df.index.names or []):
+            df["feh"] = df.index.get_level_values("feh").astype(float)
+        # else: leave any pre-existing nominal 'feh' column untouched.
         return df
 
     def get_dt_deep(self, compute=False):
@@ -335,7 +374,30 @@ class MISTIsochroneGridV2p5(MISTIsochroneGrid):
         df = StellarModelGrid.compute_additional_columns(self, df)
         with np.errstate(divide="ignore", invalid="ignore"):
             zcol = "log_surf_cell_z" if "log_surf_cell_z" in df.columns else "log_surf_z"
-            df["feh"] = df[zcol] - np.log10(df["surface_h1"]) - np.log10(SOLAR_ZX_V25)
+            # log(Z/X) - log(Z/X)_sun is TOTAL metallicity [M/H], NOT [Fe/H]. For the
+            # alpha-enhanced v2.5 grids these differ by the alpha contribution (~+0.29
+            # dex at [a/Fe]=+0.4), so using this as "feh" overstates [Fe/H] and pushes
+            # the BC-grid metallicity query past its +0.50 [Fe/H] edge for metal-rich
+            # stars -> silent NaN magnitudes. Keep the surface-derived quantity, but
+            # under its correct name (surface [M/H]) for diagnostics / future use.
+            df["mh_surf"] = df[zcol] - np.log10(df["surface_h1"]) - np.log10(SOLAR_ZX_V25)
+
+        # Option (a): the 'feh' the BC lookup consumes is the INITIAL [Fe/H] -- the
+        # nominal grid value, constant along each track, which is exactly what the BC
+        # grid (indexed by [Fe/H], one file per feh/afe node) expects. That value is
+        # already carried on the grid's 'feh' index level (set per-file from the
+        # filename via get_feh), so we set the data column from the index rather than
+        # recomputing it from surface abundances.
+        #
+        # NOTE: this uses INITIAL [Fe/H] and therefore does NOT apply any diffusion /
+        # surface-abundance-evolution ("diffusion correction") when calling the
+        # bolometric corrections. Surface [Fe/H] evolves off the initial value up the
+        # RGB; accounting for that (option b) is deferred. The surface total
+        # metallicity is preserved above as 'mh_surf' for when that is added.
+        if isinstance(df.index, pd.MultiIndex) and "feh" in (df.index.names or []):
+            df["feh"] = df.index.get_level_values("feh").astype(float)
+        # else: leave any pre-existing nominal 'feh' column untouched (do NOT overwrite
+        # it with the surface [M/H] formula, which was the bug).
         return df
 
     def get_dm_deep(self, compute=False):
@@ -366,3 +428,4 @@ class MISTIsochroneGridV2p5(MISTIsochroneGrid):
         dm_deep.name = "dm_deep"
         dm_deep.to_hdf(filename, key="dm_deep")
         return dm_deep
+     
