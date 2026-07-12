@@ -143,13 +143,18 @@ class BastiAlphaInterpIsochrone(object):
         "grids over [-0.2, +0.4] and NaN-censored above +0.4."
     )
 
-    def __init__(self, bands=None, afes=None, systems=None):
+    def __init__(self, bands=None, afes=None, systems=None, **sub_kwargs):
+        # sub_kwargs (e.g. age_range=(0.02, 14.5)) are forwarded to every
+        # fixed-alpha sub-interpolator and hence into the grid cache tags --
+        # REQUIRED to reuse grids prebuilt with an age_range, since the tag
+        # encodes it.
         self.afes = np.array(sorted(afes if afes is not None else self._AFES), dtype=float)
         self.afe_bounds = (float(self.afes[0]),
                            float(self.AFE_EXTRAP_MAX if len(self.afes) >= 2
                                  else self.afes[-1]))
         self._subs = {
-            float(a): Basti_Isochrone(bands=bands, afe=float(a), systems=systems)
+            float(a): Basti_Isochrone(bands=bands, afe=float(a), systems=systems,
+                                      **sub_kwargs)
             for a in self.afes
         }
         self.bands = self._subs[float(self.afes[0])].bands
@@ -316,9 +321,11 @@ class BastiAlphaInterpIsochrone(object):
         return pd.DataFrame(out, columns=cols)
 
 
-def get_ichrone_basti_alpha(bands=None, afes=None, systems=None):
+def get_ichrone_basti_alpha(bands=None, afes=None, systems=None, **kwargs):
     """Variable-[a/Fe] BaSTI isochrone interpolator (drop-in for the
-    StarModelV2p5 fitter). Read the module docstring's support-notch warning
-    before using for metal-rich alpha-enhanced targets."""
-    return BastiAlphaInterpIsochrone(bands=bands, afes=afes, systems=systems)
-  
+    StarModelV2p5 fitter). Extra kwargs (notably age_range=(min_gyr, max_gyr))
+    are forwarded to the underlying grids -- pass the SAME age_range used at
+    grid-build time to reuse those caches. Read the module docstring's
+    support-notch warning before using for metal-rich alpha-enhanced
+    targets."""
+    return BastiAlphaInterpIsochrone(bands=bands, afes=afes, systems=systems, **kwargs)
