@@ -3,7 +3,20 @@
 BaSTI .isc files carry reddening-free absolute magnitudes, so extinction is
 applied by the interpolator as   m_X = M_X + mu + R_X * A_V.
 
-Two sources of coefficients, in order of preference:
+Three sources of extinction, in order of preference:
+
+  0. An A_V-DEPENDENT TABLE R_X(band, A_V), built by
+     ``build_extinction_table.py`` from SVO filter transmission curves and a
+     chosen extinction law (default Fitzpatrick & Massa 2007 'fm07'; f99 /
+     ccm89 / odonnell94 available via re-run). The table captures the
+     nonlinearity of broadband extinction in A_V and is the production path:
+     A_X = R_X(A_V) * A_V, with R_X linearly interpolated on the table's A_V
+     grid. Selected via extinction_table_<curve>.npz under
+     ~/.isochrones/basti/; the active curve is DEFAULT_CURVE below (or
+     set_extinction_curve()).
+
+Legacy scalar sources, used only when no table (or no table entry for a
+band) exists:
 
   1. A derived table, ~/.isochrones/basti/extinction_coeffs.json, produced by
      ``derive_extinction_coeffs_from_mist_v25()`` below: for each band, the
@@ -179,4 +192,101 @@ def derive_extinction_coeffs_from_mist_v25(
         )
     getLogger().info("Wrote {} extinction coefficients to {}".format(len(coeffs), outfile))
     return coeffs
-  
+
+
+# ===========================================================================
+# A_V-dependent extinction table (production path)
+# ===========================================================================
+
+DEFAULT_CURVE = "fm07"
+_active_curve = None      # set via set_extinction_curve(); None -> DEFAULT_CURVE
+_table_cache = {}
+
+
+def set_extinction_curve(curve):
+    """Select which extinction_table_<curve>.npz subsequent lookups use
+    (e.g. 'fm07', 'f99_rv3.1'). Takes effect for interpolators created
+    afterwards; existing interpolators cache their handle."""
+    global _active_curve
+    _active_curve = curve
+
+
+def _table_path(curve=None):
+    c = curve or _active_curve or DEFAULT_CURVE
+    return os.path.join(ISOCHRONES, "basti",
+                        "extinction_table_{}.npz".format(c))
+
+
+class ExtinctionTable(object):
+    """Loads R_X(band, A_V) and serves fast A_X lookups.
+
+    ``handle(bands)`` returns a callable h(av) -> A_X array of shape
+    (n_bands,) for scalar av or (n_bands, n) for array av, with R_X linearly
+    interpolated (and clamped) on the table's A_V grid.
+    """
+
+    def __init__(self, path):
+        with np.load(path, allow_pickle=False) as z:
+            self.bands = [str(b) for b in z["bands"]]
+            self.av_grid = z["av_grid"].astype(float)
+            self.R = z["R"].astype(float)
+            self.provenance = json.loads(str(z["provenance"]))
+        self._index = {b: i for i, b in enumerate(self.bands)}
+        self.path = path
+
+    @property
+    def curve(self):
+        return self.provenance.get("curve")
+
+    def has(self, band):
+        return band in self._index
+
+    def handle(self, bands):
+        missing = [b for b in bands if b not in self._index]
+        if missing:
+            raise KeyError(missing)
+        Rsub = self.R[[self._index[b] for b in bands]]   # (n_bands, n_grid)
+        grid = self.av_grid
+
+        def h(av):
+            av_arr = np.atleast_1d(np.asarray(av, dtype=float))
+            avc = np.clip(av_arr, grid[0], grid[-1])
+            j = np.clip(np.searchsorted(grid, avc), 1, len(grid) - 1)
+            w = (avc - grid[j - 1]) / (grid[j] - grid[j - 1])
+            Rv = Rsub[:, j - 1] * (1.0 - w) + Rsub[:, j] * w   # (n_bands, n)
+            Ax = Rv * av_arr[None, :]
+            return Ax[:, 0] if np.isscalar(av) or np.ndim(av) == 0 else Ax
+        return h
+
+
+def load_extinction_table(curve=None):
+    """Return the ExtinctionTable for the active curve, or None if absent."""
+    path = _table_path(curve)
+    if path not in _table_cache:
+        _table_cache[path] = ExtinctionTable(path) if os.path.exists(path) else None
+    return _table_cache[path]
+
+
+def get_Ax_handle(bands):
+    """Return (callable av -> A_X array, source_description).
+
+    Prefers the A_V-dependent table; any band absent from it falls back to
+    the scalar coefficients (derived JSON, then placeholders) with a warning.
+    """
+    table = load_extinction_table()
+    if table is not None:
+        in_table = [b for b in bands if table.has(b)]
+        if len(in_table) == len(bands):
+            return table.handle(bands), "table:{}".format(table.curve)
+        getLogger().warning(
+            "Extinction table '{}' lacks band(s) {}; using scalar "
+            "coefficients for all requested bands instead.".format(
+                table.path, [b for b in bands if not table.has(b)]))
+    coeffs = get_extinction_coeffs(list(bands))
+    R = np.array([coeffs[b] for b in bands], dtype=float)
+
+    def h(av):
+        av_arr = np.atleast_1d(np.asarray(av, dtype=float))
+        Ax = R[:, None] * av_arr[None, :]
+        return Ax[:, 0] if np.isscalar(av) or np.ndim(av) == 0 else Ax
+    return h, "scalar"
