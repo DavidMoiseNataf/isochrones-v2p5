@@ -26,7 +26,7 @@ import numpy as np
 
 from ..models import IsochroneInterpolator
 from .models import BastiIsochroneGrid, DEFAULT_SYSTEMS, BASTI_NP
-from .extinction import get_extinction_coeffs
+from .extinction import get_extinction_coeffs, get_Ax_handle
 
 # Which BaSTI photometric systems provide which canonical band tokens.
 # Used to auto-select the systems to ingest from the requested bands.
@@ -89,6 +89,7 @@ class Basti_Isochrone(IsochroneInterpolator):
         self._masses = None
         self._Rx = None
         self._mag_props = None
+        self._ax_handle = None
 
     # -- no BC grid -----------------------------------------------------------
 
@@ -146,9 +147,11 @@ class Basti_Isochrone(IsochroneInterpolator):
         abs_mags = vals[:, 3:].T                # (n_bands, n)
 
         mu = 5.0 * np.log10(dist / 10.0)
-        coeffs = get_extinction_coeffs(list(bands))
-        R = np.array([coeffs[b] for b in bands], dtype=float)
-        mags = abs_mags + mu[None, :] + R[:, None] * AV[None, :]
+        if self._ax_handle is None or self._ax_bands != tuple(bands):
+            self._ax_handle, self._ax_source = get_Ax_handle(list(bands))
+            self._ax_bands = tuple(bands)
+        Ax = self._ax_handle(AV)                # (n_bands,) or (n_bands, n)
+        mags = abs_mags + mu[None, :] + np.atleast_2d(Ax.T).T
 
         if scalar:
             return float(Teff[0]), float(logg[0]), float(feh_out[0]), mags[:, 0]
@@ -183,4 +186,3 @@ def get_ichrone_basti(bands=None, afe=0.0, systems=None, **kwargs):
     (zams=99, msto=359, rgb_base=489, trgb=1289, zaheb=1299, eagb_end=2099).
     """
     return Basti_Isochrone(bands=bands, afe=afe, systems=systems, **kwargs)
-  
