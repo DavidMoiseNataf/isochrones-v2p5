@@ -23,7 +23,7 @@ basti/      one subpackage copied to  <site-packages>/isochrones/basti/
 *.py        infrastructure scripts at root: download_mist_v25.py,
             download_basti.py, diagnose_basti_grid.py,
             build_extinction_table.py, build_basti_grids.py
-analysis/   fitting-campaign and model-comparison scripts
+tutorial.md hands-on walkthrough (MIST v2.5, with a BaSTI section)
 ```
 
 The naming rule: **a file carries a version suffix if and only if it shares a

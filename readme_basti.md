@@ -19,6 +19,13 @@ python -c "import isochrones, os; print(os.path.dirname(isochrones.__file__))"
 cp -r basti  <that-path>/
 ```
 
+Copy the root scripts you will run (`download_basti.py`,
+`diagnose_basti_grid.py`, `build_extinction_table.py`,
+`build_basti_grids.py`) somewhere convenient — `~/.isochrones` is the
+convention used below. Free-[α/Fe] FITTING additionally requires the MIST
+v2.5 modules (for `StarModelV2p5`; see readme_mist_v25.md §2) and
+`pymultinest`; everything else in this readme works without them.
+
 ## 3. Downloading the data
 
 One command fetches everything (3 alphas × 15 photometric systems, ~885
@@ -91,6 +98,18 @@ Teff, logg, feh, mags = ic.interp_mag([1289, 10.0, -1.0, 776e3, 0.3], ic.bands)
 tag — pass the SAME value everywhere to reuse caches. Pre-building with
 diagnostics: `python build_basti_grids.py` (optional; grids also build
 lazily on first use, exactly like stock MIST).
+
+**How grids are assembled.** The downloaded `.isc_*` files are used in place
+— nothing is moved or merged on disk. On first use, a grid is assembled per
+(α, photometric systems, age range): the required BaSTI systems are inferred
+from your band tokens, the matching files are parsed and column-merged on
+the shared theory columns, and three cache layers are written under
+`~/.isochrones/basti/` with a tag encoding code version + α + systems + age
+range (`basti_<tag>.h5`, `dm_deep_<tag>.h5`, `full_grid_<tag>.npz`).
+Different configurations never collide; identical configurations load from
+cache in seconds. To force a rebuild after changing the code, delete the
+three files with that tag (or bump `BASTI_GRID_VERSION` in
+`basti/models.py`, which retags everything).
 
 Variable [α/Fe] (α as a sixth fit parameter, reusing the MIST v2.5 fitter):
 
@@ -177,8 +196,9 @@ can sit a few rows later (measured isochrone MSTO: rows 359–403).
 ## 9. Scientific caveats
 
 - **The (feh, α) support notch**: the +0.4 grid stops at [Fe/H] ≈ +0.09, so
-  free-α fits switch to the linear (−0.2, 0) regime above that (flagged per
-  star by the validation fitter), and free-α support ends entirely at
+  free-α fits switch to the linear (−0.2, 0) regime above that (the wrapper
+  exposes the threshold as `ic.feh_quad_max` so pipelines can flag such
+  stars), and free-α support ends entirely at
   [Fe/H] = +0.30 (the α=0 ceiling — its +0.45 node was never computed on the
   server). Only fixed α = −0.2 reaches [Fe/H] = +0.44.
 - **α = 0.4–0.6 is linear extrapolation**, not interpolation. Flagged per
