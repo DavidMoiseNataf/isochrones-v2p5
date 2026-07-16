@@ -23,6 +23,7 @@ drops into that fitter unchanged apart from the [a/Fe] treatment.
 """
 
 import numpy as np
+import pandas as pd
 
 from ..models import IsochroneInterpolator
 from .models import BastiIsochroneGrid, DEFAULT_SYSTEMS, BASTI_NP
@@ -156,6 +157,35 @@ class Basti_Isochrone(IsochroneInterpolator):
         if scalar:
             return float(Teff[0]), float(logg[0]), float(feh_out[0]), mags[:, 0]
         return Teff, logg, feh_out, mags
+
+    def __call__(self, p1, p2, p3, distance=10.0, AV=0.0):
+        """Derived-quantity DataFrame at (eep, age, feh, distance, AV).
+
+        Overrides IsochroneInterpolator.__call__, whose final concatenation
+        assumes magnitudes shaped (n_samples, n_bands). This class's
+        interp_mag returns (n_bands, n_samples) instead, so the stock method
+        mismatches lengths (the StarModelV2p5._make_samples crash:
+        "size N vs size n_bands"). Here magnitudes are transposed back to
+        (n_samples, n_bands) before concatenation, and the output columns
+        (theory columns + "<band>_mag") match the stock contract that
+        _make_samples consumes. Strictly row-preserving: N samples in ->
+        N rows out, NaN where the grid can't evaluate, never dropped.
+        """
+        eep, age, feh, dist, AV = [
+            np.atleast_1d(a).astype(float)
+            for a in np.broadcast_arrays(p1, p2, p3, distance, AV)
+        ]
+        prop_cols = list(self.model_grid.df.columns)
+        props = np.atleast_2d(self.interp_value([eep, age, feh, dist, AV], prop_cols))
+        if props.shape[0] != eep.size and props.shape[1] == eep.size:
+            props = props.T                              # -> (n_samples, n_props)
+        _, _, _, mags = self.interp_mag([eep, age, feh, dist, AV], self.bands)
+        mags = np.atleast_2d(mags)
+        if mags.shape[0] == len(self.bands) and mags.shape[1] == eep.size:
+            mags = mags.T                                # (n_bands, N) -> (N, n_bands)
+        values = np.concatenate([props, mags], axis=1)
+        cols = prop_cols + ["{}_mag".format(b) for b in self.bands]
+        return pd.DataFrame(values, columns=cols)
 
 
 def get_ichrone_basti(bands=None, afe=0.0, systems=None, **kwargs):
