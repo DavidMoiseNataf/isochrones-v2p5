@@ -108,6 +108,45 @@ has two regimes, split at the +0.4 grid's iron ceiling
 Lagrange interpolation over (−0.2, 0, +0.4) with linear extrapolation to
 +0.6; at or above it, linear through (−0.2, 0) only, NaN above α = +0.4.
 
+### Worked example: synthesize and fit a star
+
+Galactic-astronomy bandpasses — Gaia G, HST/ACS F814W, 2MASS J/H/Ks — plus a
+parallax. Band tokens are exact (verified column maps): `G`,
+`ACS_WFC_F814W`, `2MASS_J`, `2MASS_H`, `2MASS_Ks`. These touch three BaSTI
+systems (gaia-dr3, acs, 2mass), so the first run builds a three-system grid
+per α (a few minutes each; cached thereafter).
+
+```python
+import numpy as np
+from isochrones.basti.starmodel import get_ichrone_basti_alpha
+from isochrones.mist.starmodel_v2p5 import StarModelV2p5
+
+BANDS = ["G", "ACS_WFC_F814W", "2MASS_J", "2MASS_H", "2MASS_Ks"]
+ic = get_ichrone_basti_alpha(bands=BANDS, age_range=(0.02, 14.5))
+
+# --- 1. truth: an upper-RGB halo giant at 8 kpc -------------------------
+#     vector: [eep(row), log10(age/yr), [Fe/H], [a/Fe], distance_pc, AV]
+truth = [1150, 10.0, -1.0, 0.30, 8000.0, 0.5]
+_, _, _, mags = ic.interp_mag(truth, BANDS)
+
+# --- 2. synthetic measurements: 0.02 mag errors; parallax 0.125+/-0.020 mas
+rng = np.random.default_rng(42)
+obs = {b: (float(m) + rng.normal(0, 0.02), 0.02) for b, m in zip(BANDS, mags)}
+plx = (1000.0 / truth[4] + rng.normal(0, 0.020), 0.020)   # mas
+
+# --- 3. fit ---------------------------------------------------------------
+model = StarModelV2p5(ic, parallax=plx, **obs)
+model.fit(n_live_points=400)
+for p, t in zip(["eep", "age", "feh", "afe", "distance", "AV"], truth):
+    s = model.samples[p]
+    print(f"{p:>9}: truth {t:>8.3f}   fit {s.median():>8.3f} "
+          f"+/- {s.std():.3f}")
+```
+
+The posterior medians should recover the truth within the quoted
+uncertainties; `afe` = +0.30 sits inside the quadratic-interpolation regime
+at [Fe/H] = −1.0 (well below `feh_quad_max`).
+
 ## 7. EEP conventions
 
 Every isochrone has exactly 2100 rows whose 0-based row index equals the
