@@ -142,6 +142,27 @@ subsequent calls in the same session are fast. The α-interpolating object wraps
 five fixed-α grids internally and interpolates their outputs linearly in α, which
 adds only ~1.4× wall-clock over a single fixed-α evaluation.
 
+### 3b. Peeking at the grid itself
+
+Behind every interpolator sits a big pandas DataFrame indexed by
+`(log10_age, [Fe/H], EEP)` — the actual model grid. You can inspect it
+directly, which is the quickest way to see what columns exist and what the
+node spacing looks like:
+
+```python
+df = ic_fixed.model_grid.df
+print(df.shape)                    # (rows, columns)
+print(df.index.names)              # ['log10_isochrone_age_yr', 'feh', 'EEP']
+print(list(df.columns))            # every physical + magnitude column
+
+# pull ONE on-node isochrone out of the grid with a cross-section:
+iso_node = df.xs((9.6, 0.0), level=(0, 1))   # log-age 9.6, [Fe/H] = 0.0
+print(iso_node[["mass", "Teff", "logg"]].head())
+```
+
+`.xs(...)` only works at exact grid nodes; for arbitrary ages and
+metallicities, interpolate instead (§4b).
+
 ---
 
 ## 4. Interpolating stellar properties
@@ -167,6 +188,36 @@ replaces "mass" as the primary track coordinate so that the same EEP means the
 same evolutionary stage across different masses and metallicities. Rough
 landmarks: ZAMS ≈ 202, mid main sequence ≈ 330 (our G dwarf), main-sequence
 turnoff ≈ 454, RGB tip ≈ 605, with the v2.5 grid extending to 1721.
+
+### 4b. Extracting a whole interpolated isochrone
+
+`.isochrone(age, feh)` returns a complete isochrone — every EEP row — as a
+DataFrame, interpolated to ANY age and metallicity (not just grid nodes),
+with predicted magnitudes included as `<band>_mag` columns:
+
+```python
+iso = ic_fixed.isochrone(9.53, 0.12)      # log-age 9.53, [Fe/H] = +0.12
+print(iso[["mass", "Teff", "logg", "G_mag", "Ks_mag"]].head())
+```
+
+A classic sanity check (adapted from the upstream docs' visualization demo):
+an interpolated isochrone should fall neatly between its bracketing grid
+nodes. In matplotlib:
+
+```python
+import matplotlib.pyplot as plt
+
+df = ic_fixed.model_grid.df
+iso1 = df.xs((9.5, 0.00), level=(0, 1))    # on-node
+iso2 = df.xs((9.5, 0.25), level=(0, 1))    # on-node
+iso3 = ic_fixed.isochrone(9.5, 0.12)       # interpolated between them
+
+for iso, lab in [(iso1, "[Fe/H]=0.00"), (iso2, "[Fe/H]=0.25"),
+                 (iso3, "[Fe/H]=0.12 (interpolated)")]:
+    plt.plot(iso["logTeff"], iso["logL"], label=lab)
+plt.gca().invert_xaxis(); plt.xlabel("logTeff"); plt.ylabel("logL")
+plt.legend(); plt.show()
+```
 
 ---
 
@@ -202,6 +253,57 @@ intuition — e.g. how the optical–NIR colors redden as you push Aᵥ from 0 t
 how weakly the broadband magnitudes respond to α (broadband optical/NIR carries
 little α leverage, which is exactly why α is hard to pin from a star like this one;
 see the caveats in §9).
+
+### 5b. Vectorized calls: the interpolator is callable
+
+Every interpolator is itself callable, taking arrays and returning a
+DataFrame of all physical columns plus `<band>_mag` magnitudes — the
+one-line way to generate a synthetic CMD or a whole sequence of stars:
+
+```python
+import numpy as np
+
+# a synthetic isochrone ribbon: EEPs 250..600 at 4 Gyr, solar Z, 6 kpc, AV=2.5
+eeps = np.arange(250, 600, 5)
+stars = ic_fixed(eeps, 9.6, 0.0, 6000.0, 2.5)     # -> DataFrame, one row per EEP
+plt.scatter(stars["G_mag"] - stars["Ks_mag"], stars["G_mag"], s=4)
+plt.gca().invert_yaxis(); plt.xlabel("G - Ks"); plt.ylabel("G"); plt.show()
+```
+
+For the α-interpolating object the call carries the extra α slot:
+`ic_alpha(eeps, 9.6, 0.0, 0.3, 6000.0, 2.5)`.
+
+### 5c. From mass to EEP: `generate()` and `get_eep()` (evolution tracks)
+
+If you know masses rather than EEPs — the natural situation when simulating
+a population — the **evolution-track** interpolator can invert
+(mass, age, feh) → EEP for you. `generate()` wraps the inversion and the
+property lookup in one call (adapted from the upstream docs):
+
+```python
+from isochrones.mist.isochrone_v2p5 import get_ichrone_v2p5
+track = get_ichrone_v2p5(bands=["G", "J", "Ks"], afe=0.0)
+
+track.generate([0.81, 0.91, 1.01], 9.51, 0.01)        # 3 stars by mass
+print(track.get_eep(1.01, 9.51, 0.01))                # the EEP it solved for
+```
+
+The default inversion is a fast interpolation, accurate on the main sequence
+but sloppier for evolved stars (the fundamental reason fitting always uses
+EEP as the sampled parameter). For precise EEPs, pass `accurate=True` to
+either method — a real function minimization, ~1000× slower per star but
+still fast in absolute terms:
+
+```python
+track.get_eep(1.01, 9.51, 0.01, accurate=True)
+track.generate([0.81, 0.91, 1.01], 9.51, 0.01, accurate=True)
+```
+
+Because the default mode is vectorized and fast (~10⁵ stars/second), drawing
+masses from an IMF and calling `generate()` once is a perfectly good way to
+paint a synthetic population. Note these two methods live on the **track**
+interpolator (`get_ichrone_v2p5`) only — the isochrone-grid objects raise
+`NotImplementedError` for them.
 
 ---
 
@@ -376,6 +478,20 @@ lnZ = stats["global evidence"]
 
 (Read `lnZ` **before** deleting the temporary directory that holds `basename`.)
 
+A corner plot of the posterior is one import away (`pip install corner`):
+
+```python
+import corner
+params = ["eep", "age", "feh", "afe", "distance", "AV"]
+fig = corner.corner(model.samples[params], labels=params,
+                    quantiles=[0.16, 0.5, 0.84], show_titles=True)
+fig.savefig("star_corner.png", dpi=150)
+```
+
+The Aᵥ panel is the one to enjoy for our running example: a clean posterior
+bump near the true 2.5 mag, recovered from photometry alone under the flat
+0–6 prior.
+
 ---
 
 ## 8. Using multiple CPUs
@@ -457,6 +573,51 @@ README):
 
 ---
 
+## 10. The same workflow with BaSTI
+
+Everything above has a BaSTI-flavored twin: this repository also provides the
+BaSTI-IAC O1D1E1 models as `isochrones.basti` (installation, data download,
+and full reference in [readme_basti.md](readme_basti.md)). The workflow is
+identical; the conventions differ:
+
+| Convention | MIST v2.5 (this tutorial) | BaSTI |
+| --- | --- | --- |
+| Gaia bands | `G`, `BP`, `RP` | `G`, `BP`, `RP` (same) |
+| 2MASS bands | `J`, `H`, `Ks` | `2MASS_J`, `2MASS_H`, `2MASS_Ks` |
+| HST bands | `WFC3_UVIS_F606W`, … | same tokens |
+| EEP coordinate | constructed EEPs; G dwarf ≈ 330, RGB tip = 605 | file row number; G dwarf ≈ 300, TRGB = 1289 |
+| α nodes | five, −0.2 … +0.6, native interpolation | three (−0.2, 0, +0.4); quadratic/linear regimes, 0.4–0.6 extrapolated |
+| Extinction | native BC-table axis | precomputed R\_X(band, Aᵥ) table (build once) |
+| `generate()` / `get_eep()` | available on the track interpolator | not available (isochrone grid only — work in EEP) |
+
+The running example, refit with BaSTI (note the 2MASS token change and the
+`age_range` kwarg, which selects and caches the grid age window):
+
+```python
+from isochrones.basti.starmodel import get_ichrone_basti_alpha
+from isochrones.mist.starmodel_v2p5 import StarModelV2p5   # same fitter class
+
+bands = ["G", "WFC3_UVIS_F606W", "WFC3_UVIS_F814W",
+         "2MASS_J", "2MASS_H", "2MASS_Ks"]
+ic_b = get_ichrone_basti_alpha(bands=bands, age_range=(0.02, 14.5))
+
+obs = {"G": 20.63, "WFC3_UVIS_F606W": 20.84, "WFC3_UVIS_F814W": 19.49,
+       "2MASS_J": 18.28, "2MASS_H": 17.67, "2MASS_Ks": 17.46}
+model = StarModelV2p5(ic_b,
+                      parallax=(0.167, 0.017),
+                      **{b: (m, 0.02) for b, m in obs.items()})
+model.set_bounds(AV=(0, 6), eep=(100, 2100))
+model.fit(n_live_points=500)
+print(model.samples[["feh", "afe", "AV"]].median())
+```
+
+`.isochrone(age, feh)`, the vectorized callable, and `model_grid.df` all work
+exactly as in §§3b–5b. Fitting the same star with both libraries and
+differencing the posteriors is the cleanest way to measure model systematics
+— see readme_basti.md §8 for the known differences.
+
+---
+
 ## See also
 
 - `README.md` — design, the full factory/class table, and the v2.5-vs-v1.2 change
@@ -464,4 +625,7 @@ README):
 - `examples/fit_m31_giants_v25.py` — two stars, predicted-band corner plots.
 - `examples/fit_m31_sample_v25.py` — a sample, with cross-star systematics
   diagnostics.
+- `readme_mist_v25.md` / `readme_basti.md` — the two libraries documented in
+  parallel (install, data, extinction, usage, EEP conventions, differences,
+  caveats).
 - Upstream `isochrones` docs: <https://isochrones.readthedocs.io/en/latest/>
