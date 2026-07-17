@@ -19,7 +19,7 @@ python -c "import isochrones, os; print(os.path.dirname(isochrones.__file__))"
 cp mist/*_v2p5.py  <that-path>/mist/
 ```
 
-## 3. Downloading the data
+## 3. Downloading the MIST2 models
 
 `download_mist_v25.py` (stdlib-only) fetches each component on request and
 migrates the on-disk layout to the v1.2 decimal convention:
