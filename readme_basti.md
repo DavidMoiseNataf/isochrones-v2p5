@@ -29,7 +29,7 @@ v2.5 modules (for `StarModelV2p5`; see readme_mist_v25.md §2) and
 ## 3. Downloading the data
 
 One command fetches everything (3 alphas × 15 photometric systems, ~885
-tarballs → **206,655 isochrone files**; tens of GB):
+tarballs → **206,655 isochrone files**; nearly 100 GB):
 
 ```bash
 cd ~/.isochrones
