@@ -35,7 +35,7 @@ python download_mist_v25.py --reorganize-existing   # migrate an old layout
 Resulting layout: `~/.isochrones/mist/MIST_v2.5_vvcrit0.4_full_isos/`,
 `~/.isochrones/mist/tracks/MIST_v2.5_*`, `~/.isochrones/BC/mist/v2/`.
 
-## 4. Verifying the data
+## 4. Verifying the download of the MIST2 models
 
 There is no dedicated diagnostic script: the first grid build parses every
 file and fails loudly on malformed input, and the widened-bounds grid
